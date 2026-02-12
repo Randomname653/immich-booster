@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  immich-booster:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: immich-booster
+    image: immich-booster:latest
+    runtime: nvidia
+    user: "${PUID:-0}:${PGID:-0}"
+    env_file:
+      - .env
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - TZ=${TZ:-UTC}
+      - IMMICH_URL=${IMMICH_URL}
+      - IMMICH_API_KEY=${IMMICH_API_KEY}
+      - TEMP_DIR=${TEMP_DIR:-/app/temp}
+      - DEVICE_FILTER=${DEVICE_FILTER:-Pixel}
+    volumes:
+      - ./temp:/app/temp
+      - ./config:/app/config
+      - ./models:/models
+    restart: unless-stopped
