@@ -5,12 +5,14 @@ FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# WICHTIG: autoconf, automake, libtool sind fuer autogen.sh zwingend erforderlich
 RUN sed -i "s|http://archive.ubuntu.com/ubuntu/|http://us.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list \
     && sed -i "s|http://security.ubuntu.com/ubuntu/|http://us.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get update --fix-missing && apt-get install -y --no-install-recommends \
     ca-certificates git wget curl build-essential pkg-config nasm yasm cmake meson ninja-build \
     python3 python3-pip python3-dev zlib1g-dev libssl-dev libfreetype6-dev libfontconfig1-dev p7zip-full \
+    autoconf automake libtool \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/src
@@ -18,7 +20,7 @@ WORKDIR /opt/src
 # 1) NVENC headers
 RUN git clone --depth=1 https://github.com/FFmpeg/nv-codec-headers.git && make -C nv-codec-headers install
 
-# 2) Build FFmpeg 7.1 mit Freetype Support fuer Wasserzeichen
+# 2) Build FFmpeg 7.1
 RUN git clone --depth=1 --branch release/7.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg \
     && cd ffmpeg \
         && ./configure --prefix=/opt/ffmpeg --enable-shared --disable-static \
@@ -29,7 +31,7 @@ RUN git clone --depth=1 --branch release/7.1 https://github.com/FFmpeg/FFmpeg.gi
             --enable-libfreetype --enable-libfontconfig --disable-doc --disable-debug \
     && make -j"$(nproc)" && make install
 
-# 3) Build zimg, VapourSynth, FFMS2 (wie gehabt)
+# 3) Build zimg, VapourSynth, FFMS2
 RUN pip3 install --no-cache-dir "Cython>=3.0.0"
 RUN git clone --depth=1 --branch release-3.0.5 https://github.com/sekrit-twc/zimg.git && cd zimg && ./autogen.sh && ./configure --prefix=/usr/local && make -j"$(nproc)" && make install
 RUN wget https://github.com/vapoursynth/vapoursynth/archive/refs/tags/R70.tar.gz && tar -zxvf R70.tar.gz && cd vapoursynth-R70 && ./autogen.sh && ./configure --prefix=/usr/local && make -j"$(nproc)" && make install && ldconfig
@@ -66,7 +68,7 @@ RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/wh
 
 COPY . .
 
-# Healthcheck FIX
+# Healthcheck
 RUN echo "import sys\nimport vapoursynth as vs\ntry:\n    if hasattr(vs.core, \"knlm\"):\n        sys.exit(0)\n    sys.exit(1)\nexcept:\n    sys.exit(1)" > healthcheck.py
 
 CMD ["python3", "main.py"]
