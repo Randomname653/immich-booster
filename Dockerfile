@@ -3,10 +3,8 @@
 ############################################################
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONPATH="/usr/local/lib/python3.10/site-packages"
-ENV PKG_CONFIG_PATH="/opt/ffmpeg/lib/pkgconfig:/usr/local/lib/pkgconfig"
-ENV LD_LIBRARY_PATH="/opt/ffmpeg/lib:/usr/local/lib"
 
+# WICHTIG: autotools, pkg-config, meson, ninja, boost, Text-Libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git wget curl build-essential pkg-config nasm yasm cmake \
     meson ninja-build python3 python3-pip python3-dev zlib1g-dev \
@@ -15,9 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf automake libtool && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/src
+
+# 1) NVENC headers
 RUN git clone --depth=1 https://github.com/FFmpeg/nv-codec-headers.git && make -C nv-codec-headers install
 
-# FFmpeg 7.1 Build
+# 2) Build FFmpeg 7.1
 RUN git clone --depth=1 --branch release/7.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg \
     && cd ffmpeg && ./configure --prefix=/opt/ffmpeg --enable-shared --disable-static \
     --extra-cflags="-I/usr/local/include -I/usr/local/cuda/include" \
@@ -27,15 +27,34 @@ RUN git clone --depth=1 --branch release/7.1 https://github.com/FFmpeg/FFmpeg.gi
     --enable-filter=drawtext --disable-doc --disable-debug \
     && make -j"$(nproc)" && make install
 
+# PFADE GLOBAL SETZEN - Erweitert fuer den Linker (-L und -Wl,-rpath)
+ENV PYTHONPATH="/usr/local/lib/python3.10/site-packages"
+ENV PKG_CONFIG_PATH="/opt/ffmpeg/lib/pkgconfig:/usr/local/lib/pkgconfig"
+ENV LD_LIBRARY_PATH="/opt/ffmpeg/lib:/usr/local/lib"
+ENV CFLAGS="-I/opt/ffmpeg/include -I/usr/local/include"
+ENV CXXFLAGS="-I/opt/ffmpeg/include -I/usr/local/include"
+# WICHTIG: Hier sagen wir dem Linker explizit, wo er die .so Dateien findet
+ENV LDFLAGS="-L/opt/ffmpeg/lib -L/usr/local/lib -Wl,-rpath,/opt/ffmpeg/lib"
+
+# 3) Build zimg
 RUN pip3 install --no-cache-dir "Cython>=3.0.0"
 RUN git clone --depth=1 --branch release-3.0.5 https://github.com/sekrit-twc/zimg.git && cd zimg && ./autogen.sh && ./configure --prefix=/usr/local && make -j"$(nproc)" && make install
+
+# 4) Build VapourSynth
 RUN wget https://github.com/vapoursynth/vapoursynth/archive/refs/tags/R70.tar.gz && tar -zxvf R70.tar.gz && cd vapoursynth-R70 && ./autogen.sh && ./configure --prefix=/usr/local && make -j"$(nproc)" && make install && ldconfig
-RUN git clone --depth=1 https://github.com/FFMS/ffms2.git && cd ffms2 && ./autogen.sh && ./configure --prefix=/usr/local && make -j"$(nproc)" && make install \
+
+# 5) Build FFMS2 (Sollte jetzt die FFmpeg Libs finden)
+RUN git clone --depth=1 https://github.com/FFMS/ffms2.git && cd ffms2 \
+    && ./autogen.sh \
+    && ./configure --prefix=/usr/local \
+    && make -j"$(nproc)" && make install \
     && mkdir -p /usr/local/lib/vapoursynth && ln -s /usr/local/lib/libffms2.so /usr/local/lib/vapoursynth/libffms2.so
 
+# 6) Compile KNLMeansCL
 RUN git clone https://github.com/Khanattila/KNLMeansCL.git && cd KNLMeansCL && meson setup build --prefix=/usr/local --buildtype=release && ninja -C build && ninja -C build install \
     && mkdir -p /usr/local/lib/vapoursynth && find /usr/local/lib -name "libknlmeanscl.so" -exec cp {} /usr/local/lib/vapoursynth/ \;
 
+# 7) vsrepo
 RUN wget -O /usr/local/bin/vsrepo.py https://raw.githubusercontent.com/vapoursynth/vsrepo/master/vsrepo.py && chmod +x /usr/local/bin/vsrepo.py && python3 /usr/local/bin/vsrepo.py update && (python3 /usr/local/bin/vsrepo.py install fmtconv lsmas || true)
 
 ############################################################
