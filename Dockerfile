@@ -1,19 +1,4 @@
-Das ist ärgerlich, aber die Ursache ist glasklar: Python findet VapourSynth nicht.
-
-Wir haben VapourSynth zwar kompiliert und installiert, aber im Builder-Stage haben wir vergessen, dem Python-Interpreter zu sagen, wo das neue Modul liegt. Deshalb schlägt import vapoursynth fehl, wenn vsrepo.py startet.
-
-In der Runtime-Stage hatten wir den PYTHONPATH gesetzt, aber im Builder fehlte er.
-
-Hier ist das endgültig korrigierte Dockerfile.
-Ich habe ENV PYTHONPATH und LD_LIBRARY_PATH jetzt ganz oben im Builder-Stage eingefügt, damit alle nachfolgenden Schritte (FFMS2, vsrepo) Zugriff darauf haben.
-
-Der Fix
-PowerShell
-# 1. Verzeichnis
-Set-Location -Path "c:\Users\lucky\Video-Boost\immich-booster"
-
-# 2. Dockerfile überschreiben
-Set-Content -Path "Dockerfile" -Value '############################################################
+############################################################
 # Builder stage: CUDA 12.4 devel for FFmpeg + VapourSynth
 ############################################################
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
