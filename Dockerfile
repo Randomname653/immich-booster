@@ -13,7 +13,7 @@ ENV CFLAGS="-I/opt/ffmpeg/include -I/usr/local/include"
 ENV CXXFLAGS="-I/opt/ffmpeg/include -I/usr/local/include"
 ENV LDFLAGS="-L/opt/ffmpeg/lib -L/usr/local/lib"
 
-# Dependencies inkl. Meson/Ninja und Boost
+# Dependencies inkl. Meson/Ninja, Boost und Text-Libs
 RUN sed -i "s|http://archive.ubuntu.com/ubuntu/|http://us.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list \
     && sed -i "s|http://security.ubuntu.com/ubuntu/|http://us.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list \
     && rm -rf /var/lib/apt/lists/* \
@@ -58,12 +58,15 @@ RUN git clone --depth=1 https://github.com/FFMS/ffms2.git && cd ffms2 \
     && make -j"$(nproc)" && make install \
     && mkdir -p /usr/local/lib/vapoursynth && ln -s /usr/local/lib/libffms2.so /usr/local/lib/vapoursynth/libffms2.so
 
-# 6) Compile KNLMeansCL from Source (MESON FIX)
+# 6) Compile KNLMeansCL from Source (MESON)
+# FIX: Wir kopieren die .so Datei explizit an den richtigen Ort
 RUN git clone https://github.com/Khanattila/KNLMeansCL.git \
     && cd KNLMeansCL \
     && meson setup build --prefix=/usr/local --buildtype=release \
     && ninja -C build \
-    && ninja -C build install
+    && ninja -C build install \
+    && mkdir -p /usr/local/lib/vapoursynth \
+    && find /usr/local/lib -name "libknlmeanscl.so" -exec cp {} /usr/local/lib/vapoursynth/ \;
 
 # 7) Install fmtconv & lsmas via vsrepo
 RUN wget -O /usr/local/bin/vsrepo.py https://raw.githubusercontent.com/vapoursynth/vsrepo/master/vsrepo.py && chmod +x /usr/local/bin/vsrepo.py && python3 /usr/local/bin/vsrepo.py update && (python3 /usr/local/bin/vsrepo.py install fmtconv lsmas || true)
