@@ -161,7 +161,8 @@ def process_video(asset):
     
     wm = ""
     if WATERMARK_ENABLED:
-        wm = f"-vf \"drawtext=text='{WATERMARK_TEXT}':fontcolor=white@{WATERMARK_ALPHA}:fontsize=h/60:x=w-tw-20:y=h-th-20\""
+        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        wm = f"-vf \"drawtext=fontfile='{font_path}':text='{WATERMARK_TEXT}':fontcolor=white@{WATERMARK_ALPHA}:fontsize=h/60:x=w-tw-20:y=h-th-20\""
 
     cmd = (
         f"vspipe -c y4m processor_wrapper.py - | "
