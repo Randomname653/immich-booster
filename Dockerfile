@@ -5,19 +5,20 @@ FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# WICHTIG: autotools & pkg-config
+# WICHTIG: Text-Dependencies (harfbuzz, fribidi) fuer drawtext!
 RUN sed -i "s|http://archive.ubuntu.com/ubuntu/|http://us.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list \
     && sed -i "s|http://security.ubuntu.com/ubuntu/|http://us.archive.ubuntu.com/ubuntu/|g" /etc/apt/sources.list \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get update --fix-missing && apt-get install -y --no-install-recommends \
     ca-certificates git wget curl build-essential pkg-config nasm yasm cmake meson ninja-build \
-    python3 python3-pip python3-dev zlib1g-dev libssl-dev libfreetype6-dev libfontconfig1-dev p7zip-full \
+    python3 python3-pip python3-dev zlib1g-dev \
+    libssl-dev libfreetype6-dev libfontconfig1-dev libharfbuzz-dev libfribidi-dev \
     autoconf automake libtool \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/src
 
-# GLOBALE PFADE FUER BUILDER (Damit vsrepo und ffms2 alles finden)
+# GLOBALE PFADE
 ENV PYTHONPATH="/usr/local/lib/python3.10/site-packages"
 ENV PKG_CONFIG_PATH="/opt/ffmpeg/lib/pkgconfig:/usr/local/lib/pkgconfig"
 ENV LD_LIBRARY_PATH="/opt/ffmpeg/lib:/usr/local/lib"
@@ -28,7 +29,7 @@ ENV LDFLAGS="-L/opt/ffmpeg/lib -L/usr/local/lib"
 # 1) NVENC headers
 RUN git clone --depth=1 https://github.com/FFmpeg/nv-codec-headers.git && make -C nv-codec-headers install
 
-# 2) Build FFmpeg 7.1 (MIT Freetype/Drawtext Support)
+# 2) Build FFmpeg 7.1 (Full Drawtext Support)
 RUN git clone --depth=1 --branch release/7.1 https://github.com/FFmpeg/FFmpeg.git ffmpeg \
     && cd ffmpeg \
         && ./configure --prefix=/opt/ffmpeg --enable-shared --disable-static \
@@ -36,7 +37,8 @@ RUN git clone --depth=1 --branch release/7.1 https://github.com/FFmpeg/FFmpeg.gi
             --extra-ldflags="-L/usr/local/lib -L/usr/local/cuda/lib64" \
             --extra-libs="-lpthread -lm" --bindir=/opt/ffmpeg/bin \
             --enable-gpl --enable-nonfree --enable-cuda-nvcc --enable-libnpp \
-            --enable-libfreetype --enable-libfontconfig --enable-filter=drawtext \
+            --enable-libfreetype --enable-libfontconfig --enable-libharfbuzz --enable-libfribidi \
+            --enable-filter=drawtext \
             --disable-doc --disable-debug \
     && make -j"$(nproc)" && make install
 
@@ -54,8 +56,8 @@ RUN git clone --depth=1 https://github.com/FFMS/ffms2.git && cd ffms2 \
     && make -j"$(nproc)" && make install \
     && mkdir -p /usr/local/lib/vapoursynth && ln -s /usr/local/lib/libffms2.so /usr/local/lib/vapoursynth/libffms2.so
 
-# 6) VSREPO (Jetzt mit korrektem PYTHONPATH)
-RUN wget -O /usr/local/bin/vsrepo.py https://raw.githubusercontent.com/vapoursynth/vsrepo/master/vsrepo.py && chmod +x /usr/local/bin/vsrepo.py && python3 /usr/local/bin/vsrepo.py update && (python3 /usr/local/bin/vsrepo.py install knlmeanscl fmtconv || true)
+# 6) Install Plugins (lsmas, knlmeanscl)
+RUN wget -O /usr/local/bin/vsrepo.py https://raw.githubusercontent.com/vapoursynth/vsrepo/master/vsrepo.py && chmod +x /usr/local/bin/vsrepo.py && python3 /usr/local/bin/vsrepo.py update && (python3 /usr/local/bin/vsrepo.py install knlmeanscl fmtconv lsmas || true)
 
 ############################################################
 # Runtime stage
@@ -67,9 +69,11 @@ ENV VAPOURSYNTH_PLUGIN_PATH=/usr/local/lib/vapoursynth
 ENV PYTHONPATH=/app:/usr/local/lib/python3.10/site-packages
 ENV LD_LIBRARY_PATH="/opt/ffmpeg/lib:/usr/local/lib:$LD_LIBRARY_PATH"
 
+# Runtime: Fonts und Libs fuer drawtext
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libexpat1 libpython3.10 libatomic1 ca-certificates libimage-exiftool-perl ocl-icd-libopencl1 \
-    python3 python3-pip libfreetype6 libfontconfig1 fonts-dejavu-core fontconfig \
+    python3 python3-pip \
+    libfreetype6 libfontconfig1 libharfbuzz0b libfribidi0 fonts-dejavu-core fontconfig \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /etc/OpenCL/vendors && echo "libnvidia-opencl.so.1" > /etc/OpenCL/vendors/nvidia.icd
@@ -86,7 +90,6 @@ RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/wh
 
 COPY . .
 
-# Minimal Healthcheck
 RUN echo "import sys; import vapoursynth as vs; sys.exit(0 if hasattr(vs.core, \"knlm\") else 1)" > healthcheck.py
 
 CMD ["python3", "main.py"]
