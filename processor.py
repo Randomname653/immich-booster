@@ -1,4 +1,6 @@
 import vapoursynth as vs
+core = vs.core
+core.max_cache_size = 4000
 from vapoursynth import core
 import os
 
