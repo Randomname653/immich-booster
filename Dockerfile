@@ -67,7 +67,7 @@ ENV PYTHONPATH=/app:/usr/local/lib/python3.10/site-packages
 ENV LD_LIBRARY_PATH="/opt/ffmpeg/lib:/usr/local/lib"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libexpat1 libpython3.10 libatomic1 ca-certificates libimage-exiftool-perl ocl-icd-libopencl1 \
+    libexpat1 libpython3.10 libatomic1 ca-certificates libimage-exiftool-perl libio-aio-perl ocl-icd-libopencl1 \
     python3 python3-pip libfreetype6 libfontconfig1 libharfbuzz0b libfribidi0 fonts-dejavu-core fontconfig \
     libboost-filesystem1.74.0 libboost-system1.74.0 && rm -rf /var/lib/apt/lists/*
 
