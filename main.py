@@ -70,60 +70,51 @@ def get_asset_info(asset_id):
 
 def get_best_source_and_parent(initial_asset):
     """
-    Analysiert den Stack eines Assets.
-    Return: (best_source_asset, stack_parent_id)
-    - best_source_asset: Das groesste File im Stack (vermutlich das echte Original)
-    - stack_parent_id: Die ID des Haupt-Elements fuer das Stacking
+    Findet die absolut größte Datei innerhalb eines Stacks durch explizite API-Abfragen.
     """
-    
-    # 1. Ist das Asset Teil eines Stacks?
-    parent_id = initial_asset.get('stackParentId') # Wenn es ein Kind ist
-    
-    # Wenn kein Parent, ist es vielleicht selbst der Parent oder Single?
-    # Wir behandeln es erst mal als Single/Parent.
+    parent_id = initial_asset.get('stackParentId')
     primary_id = parent_id if parent_id else initial_asset['id']
     
-    # 2. Wenn nicht gestackt (oder wir wissen es nicht genau), pruefen wir via API
-    # Wir holen den "Stack" via Parent ID (oder eigener ID)
-    # Da Immich API etwas tricky ist, holen wir erst mal das Primary Asset komplett
-    primary_asset = get_asset_info(primary_id)
-    
-    if not primary_asset:
+    # 1. Hol die vollständigen Stack-Informationen vom Parent
+    try:
+        r = requests.get(f"{IMMICH_URL}/assets/{primary_id}", headers={"x-api-key": API_KEY})
+        if r.status_code != 200:
+            return initial_asset, initial_asset['id']
+        
+        parent_data = r.json()
+        
+        # 2. Sammle alle Assets im Stack (Parent + Kinder)
+        stack_assets = [parent_data]
+        if 'stack' in parent_data and parent_data['stack']:
+            stack_assets.extend(parent_data['stack'])
+        
+        # 3. Wer ist der schwerste Brocken?
+        best_source = initial_asset
+        # Wir holen für jeden Kandidaten die echte Größe, falls nicht im Search-Result
+        current_max_size = 0
+        
+        for candidate in stack_assets:
+            # Wir fragen das Asset nochmal einzeln ab, um die echte Dateigröße zu bekommen
+            # (Search Results sind oft unvollständig)
+            c_info = get_asset_info(candidate['id'])
+            if not c_info: continue
+            
+            # Dateigröße aus den EXIF oder File-Infos
+            size = int(c_info.get('exifInfo', {}).get('fileSizeInByte', 0) or 0)
+            
+            # Debug Log für dich
+            print(f"📊 Check Candidate: {c_info.get('originalFileName')} | Size: {size/1024/1024:.2f} MB")
+            
+            if size > current_max_size:
+                current_max_size = size
+                best_source = c_info
+                
+        print(f"👑 Result: Winner is {best_source.get('originalFileName')} with {current_max_size/1024/1024:.2f} MB")
+        return best_source, primary_id
+
+    except Exception as e:
+        print(f"⚠️ Fehler bei Stack-Analyse: {e}")
         return initial_asset, initial_asset['id']
-
-    # Sammle alle Kandidaten (Parent + Kinder)
-    candidates = [primary_asset]
-    
-    # Hat der Parent Kinder? (Im 'stack' Objekt)
-    if 'stack' in primary_asset and primary_asset['stack']:
-        # Wir müssen die IDs der Kinder holen. Leider liefert /assets/{id} nicht immer die Kinder-Details direkt.
-        # Wir verlassen uns auf das, was da ist.
-        pass
-    
-    # Wir suchen nach dem groessten File ("Source of Truth")
-    # Achtung: Wir haben hier evtl. nicht alle Kinder, wenn die API sie nicht listet.
-    # Aber wir vergleichen zumindest das, was wir haben.
-    
-    # Einfache Heuristik:
-    # Wenn wir "Google Boost" vs "Original" haben, wollen wir das Original.
-    # Das Original ist meistens groesser.
-    
-    best_candidate = primary_asset
-    max_size = int(primary_asset.get('exifInfo', {}).get('fileSizeInByte', 0) or 0)
-    
-    # Falls das Search-Result Kinder hatte (manchmal sind die in search results flattened)
-    # Wir nehmen vereinfacht an: Das Input-Asset oder dessen Parent sind die Hauptkandidaten.
-    
-    # Check: Ist das Input-Asset evtl. groesser als der Parent? (Sollte nicht sein, aber sicher ist sicher)
-    input_size = int(initial_asset.get('exifInfo', {}).get('fileSizeInByte', 0) or 0)
-    
-    if input_size > max_size:
-        best_candidate = initial_asset
-        max_size = input_size
-
-    print(f"🔎 Stack-Check: Primary={primary_id}, Source={best_candidate['id']} ({max_size/1024/1024:.2f} MB)")
-    
-    return best_candidate, primary_id
 
 def process_video(asset):
     # Schritt 1: Das RICHTIGE Original finden
