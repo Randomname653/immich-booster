@@ -23,7 +23,7 @@ def run_boost(input_path, output_path):
     - < 4K Input -> AI Upscale (x2) auf 4K
     """
     # 1. Video laden (FFMS2 ist der stabilste Source-Filter für MP4/MKV)
-    clip = core.ffms2.Source(source=input_path, cache=False)
+    clip = core.lsmas.LibavSMASHSource(source=input_path)
     
     # Metadaten prüfen
     in_w = clip.width
