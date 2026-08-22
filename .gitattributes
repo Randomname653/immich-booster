@@ -1,0 +1,8 @@
+# Im Container laufen diese Dateien unter Linux - immer LF, egal auf welchem
+# System sie bearbeitet wurden.
+*.py    text eol=lf
+*.yml   text eol=lf
+*.txt   text eol=lf
+*.md    text eol=lf
+Dockerfile text eol=lf
+.env.example text eol=lf

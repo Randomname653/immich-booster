@@ -1,0 +1,32 @@
+# Secrets - NIEMALS committen
+.env
+.env.*
+!.env.example
+*.key
+
+# Laufzeit-Daten
+temp/
+config/
+models/
+*.db
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Testmaterial / Ausgaben
+testdata/
+testasset/
+test*/
+out/
+*.mp4
+*.mov
+*.mkv
+*.3gp
+*.3GP
+*.MP4
+*.MOV
+*.avi
+*.webm

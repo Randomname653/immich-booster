@@ -1,80 +1,124 @@
-import vapoursynth as vs
-from vapoursynth import core
+"""VapourSynth-Pipeline: temporale Restauration und Skalierung.
+
+Wird von vspipe geladen und liest seine Parameter aus der Umgebung, weil
+vspipe keine eigenen Argumente an das Skript durchreicht.
+
+Verfahren: BasicVSR++ "NTIRE 2021 Quality Enhancement of Compressed Video,
+Track 3". Das Modell arbeitet temporal, zieht seine Information also aus den
+Nachbarframes statt Details zu erfinden. Anschliessend wird klassisch mit
+Lanczos vergroessert. Bewusst KEIN KI-Upscaler: die getesteten Kandidaten
+(SwinIR, DPIR) erzeugen einen glattgebuegelten Plastik-Eindruck, der schlechter
+aussieht als das Original.
+"""
+
 import os
 
-try:
-    from vsgan import VSGAN
-    _vsgan_available = True
-except Exception:
-    _vsgan_available = False
+import vapoursynth as vs
 
-# Globale Settings
-_threads = int(os.environ.get("VS_THREADS", "12"))
-_cache_mb = int(os.environ.get("VS_CACHE_MB", "32000"))
-core.num_threads = _threads
-core.max_cache_size = _cache_mb
+core = vs.core
 
-def run_boost(input_path, output_path):
-    """
-    Smarte Pipeline:
-    - 4K Input -> Nur Denoising & Cleaning (Kein AI Upscale)
-    - < 4K Input -> AI Upscale (x2) auf 4K
-    """
-    # 1. Video laden (FFMS2 ist der stabilste Source-Filter für MP4/MKV)
-    clip = core.ffms2.Source(source=input_path, cache=False)
-    
-    # Metadaten prüfen
-    in_w = clip.width
-    in_h = clip.height
-    is_4k_or_larger = (in_w >= 3840 or in_h >= 2160)
+_ROOT = os.environ.get("VS_PLUGIN_ROOT", "")
 
-    # 2. Konvertieren zu RGB (float) für Bearbeitung
-    clip = core.resize.Bicubic(clip, format=vs.RGBS, matrix_in_s="709")
 
-    # 3. Entscheidung: AI Upscale oder nur Cleaning?
-    
-    # Pfad zum Modell (Erwartet RealESRGAN_x2plus.pth für beste Performance/Qualität)
-    model_path = os.environ.get("VSGAN_MODEL_PATH", "/models/model.pth")
-    
-    if is_4k_or_larger:
-        # === WEG A: Native 4K Bearbeitung ===
-        # Kein Upscale, nur Entrauschen.
-        # KNLMeansCL ist ein exzellenter GPU-beschleunigter Denoiser.
-        # h=0.6 ist mild (für gute Lichtverhältnisse), bei Konzerten evtl. etwas mehr.
-        # Wir lassen es auf einem moderaten Allround-Wert.
-        print(f"Input ist bereits 4K ({in_w}x{in_h}). Überspringe AI-Upscale, aktiviere Denoising.")
-        clip = core.knlm.KNLMeansCL(clip, d=2, a=2, h=0.8, device_type='gpu')
-        
-    else:
-        # === WEG B: Upscaling für SD/HD Material ===
-        print(f"Input ist < 4K ({in_w}x{in_h}). Aktiviere AI-Upscale.")
-        
-        # Versuche VSGAN mit x2 Modell
-        if _vsgan_available and os.path.exists(model_path):
+def _load_plugins():
+    """Plugins laden, die nicht im Autoload-Pfad liegen (portables Setup)."""
+    if not _ROOT:
+        return
+    for sub in ("vsmlrt/vsort", "vsmlrt/vsmlrt-cuda", "vsmlrt"):
+        path = os.path.join(_ROOT, *sub.split("/"))
+        if os.path.isdir(path):
             try:
-                vsg = VSGAN(device="cuda")
-                vsg.load_model(model_path)
-                # Tile-Größe: Wichtig um VRAM nicht zu sprengen. 
-                # Blackwell hat viel VRAM, wir können 400-512 nehmen.
-                clip = vsg.run(clip, chunk=False, tile=512, overlap=16)
-            except Exception as e:
-                print(f"WARNUNG: VSGAN fehlgeschlagen ({e}). Fallback auf KNLMeansCL.")
-                clip = core.knlm.KNLMeansCL(clip, d=2, a=2, h=1.2, device_type='gpu')
-        else:
-            print("Kein AI-Modell gefunden oder VSGAN nicht verfügbar. Nutze klassischen Denoiser.")
-            clip = core.knlm.KNLMeansCL(clip, d=2, a=2, h=1.2, device_type='gpu')
+                os.add_dll_directory(path)
+            except (AttributeError, OSError):
+                pass
+            os.environ["PATH"] = path + os.pathsep + os.environ.get("PATH", "")
+    ffms2 = os.environ.get("VS_FFMS2")
+    if ffms2 and os.path.exists(ffms2) and not hasattr(core, "ffms2"):
+        core.std.LoadPlugin(ffms2)
 
-    # 4. Kontrast/Licht-Verbesserung (Mildes "Pop")
-    # Gamma 0.95 macht dunkle Bereiche (Konzerte!) minimal heller, ohne Rauschen zu explodieren
-    clip = core.std.Levels(clip, gamma=0.95, min_in=0.0, max_in=1.0, min_out=0.0, max_out=1.0, planes=0)
 
-    # 5. Finale Auflösung sicherstellen (Max 4K)
-    # Falls wir z.B. 1440p x2 = 5K haben, skalieren wir sanft auf 4K zurück.
-    TARGET_W, TARGET_H = 3840, 2160
-    if clip.width > TARGET_W or clip.height > TARGET_H:
-        clip = core.resize.Bicubic(clip, width=TARGET_W, height=TARGET_H, format=vs.RGBS)
+def _input_matrix(clip):
+    """Farbmatrix der Quelle bestimmen.
 
-    # 6. Zurück zu YUV420P10 für den Encoder (NVENC liebt 10-bit Input)
-    clip = core.resize.Bicubic(clip, format=vs.YUV420P10, matrix_s="709")
-    
+    Standard-definition-Material folgt BT.601, HD und groesser BT.709. Der
+    Vorgaenger nahm pauschal 709 an und verschob damit bei jedem SD-Video die
+    Farben. Traegt der Clip die Matrix selbst im Frame, hat diese Vorrang.
+    """
+    try:
+        props = clip.get_frame(0).props
+        matrix = props.get("_Matrix")
+        # 2 = "unspecified", damit koennen wir nichts anfangen.
+        if matrix is not None and matrix != 2:
+            return None  # bereits getaggt, resize uebernimmt es selbst
+    except Exception:
+        pass
+    return "470bg" if min(clip.width, clip.height) < 720 else "709"
+
+
+def _apply_rotation(clip):
+    """Container-Rotation anwenden, die ffms2 als Frame-Property meldet."""
+    try:
+        rot = int(clip.get_frame(0).props.get("_Rotation", 0) or 0)
+    except Exception:
+        return clip
+    rot %= 360
+    if rot == 90:
+        return core.std.Transpose(core.std.FlipVertical(clip))
+    if rot == 180:
+        return core.std.FlipVertical(core.std.FlipHorizontal(clip))
+    if rot == 270:
+        return core.std.FlipVertical(core.std.Transpose(clip))
     return clip
+
+
+def build(source, target_w=0, target_h=0, restore=True, model=6,
+          length=15, tile=0, cpu_cache=False):
+    """Verarbeitungskette aufbauen und den fertigen Clip zurueckgeben."""
+    _load_plugins()
+
+    clip = core.ffms2.Source(source=source, cache=False)
+    clip = _apply_rotation(clip)
+
+    matrix_in = _input_matrix(clip)
+    if matrix_in:
+        rgb = core.resize.Bicubic(clip, format=vs.RGBS, matrix_in_s=matrix_in)
+    else:
+        rgb = core.resize.Bicubic(clip, format=vs.RGBS)
+
+    if restore:
+        from vsbasicvsrpp import basicvsrpp
+        rgb = basicvsrpp(
+            rgb,
+            model=model,
+            length=length,
+            tile=[tile, tile] if tile else [0, 0],
+            tile_pad=16,
+            cpu_cache=cpu_cache,
+        )
+
+    if target_w and target_h and (target_w != rgb.width or target_h != rgb.height):
+        rgb = core.resize.Lanczos(rgb, target_w, target_h, filter_param_a=3)
+
+    # 10 bit, weil NVENC damit sauberer quantisiert und Banding vermeidet.
+    return core.resize.Bicubic(rgb, format=vs.YUV420P10, matrix_s="709")
+
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# vspipe laedt dieses Modul als Skript: Ausgabe direkt setzen.
+if "VS_SOURCE" in os.environ:
+    build(
+        source=os.environ["VS_SOURCE"],
+        target_w=_env_int("VS_TARGET_W", 0),
+        target_h=_env_int("VS_TARGET_H", 0),
+        restore=os.environ.get("VS_RESTORE", "1") not in ("0", "false", "no"),
+        model=_env_int("VS_MODEL", 6),
+        length=_env_int("VS_LENGTH", 15),
+        tile=_env_int("VS_TILE", 0),
+        cpu_cache=os.environ.get("VS_CPU_CACHE", "0") in ("1", "true", "yes"),
+    ).set_output()

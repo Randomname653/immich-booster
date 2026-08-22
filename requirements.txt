@@ -1,3 +1,4 @@
+# torch/torchvision werden im Dockerfile aus dem cu128-Index installiert und
+# duerfen hier nicht stehen - sonst zieht pip die CPU-Variante von PyPI nach.
 requests>=2.31.0
-tqdm>=4.66.0
-vsgan
+vsbasicvsrpp>=3.0.0

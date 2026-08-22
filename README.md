@@ -1,222 +1,141 @@
-# Immich Booster - Video Enhancement Pipeline
+# Immich Booster
 
-Ein vollautomatisierter Container für KI-gestützter Videoverbesserung mit NVIDIA Blackwell (CUDA 12.4), VapourSynth und nativer Immich-Integration.
+Restauriert alte, stark komprimierte Videos in einer Immich-Bibliothek und legt
+das Ergebnis als gestapeltes Asset neben das Original. **Das Original bleibt
+immer erhalten** und wird nie ersetzt.
 
-## Features
+Läuft als Container auf einem NAS mit NVIDIA-GPU, arbeitet standardmäßig nachts.
 
-✅ **Automatische Videoverarbeitung** via Immich API
-✅ **GPU-beschleunigt** mit NVIDIA NVENC (HEVC)
-✅ **VapourSynth Pipeline** für professionelle Verarbeitung
-✅ **Metadaten-Kloning** via ExifTool (GPS, Zeitstempel, Kamera-Modell)
-✅ **Automatisches Stacking** im Original-Album
-✅ **CUDA 12.4** für maximale Performance
+## Was es tut
 
-## Pipeline-Schritte
+1. Holt alle Videos über die Immich-API (über **alle** Ergebnisseiten)
+2. Stuft jedes Video danach ein, wie stark es beschädigt ist
+3. Restauriert die lohnenden mit **BasicVSR++**, skaliert sie hoch und kodiert mit NVENC
+4. Prüft das Ergebnis, überträgt die Metadaten, brennt eine KI-Kennzeichnung ein
+5. Lädt hoch, stapelt mit dem Original und setzt einen Immich-Tag
 
-1. **Fetch**: Video aus Immich downloaden
-2. **Process**: VapourSynth Pipeline (Denoise + Light Enhancement) auf GPU
-3. **Tag**: Dateiname mit `_boosted` versehen
-4. **Meta-Clone**: ExifTool kopiert alle Metadaten vom Original
-5. **Upload & Stack**: Re-Upload und via API mit Original "stacken"
+## Das Bildverfahren
 
-## Setup
+Verwendet wird **BasicVSR++, Modell „NTIRE 2021 Quality Enhancement of
+Compressed Video, Track 3"**. Das Modell arbeitet *temporal*: Es zieht seine
+Information aus den Nachbarframes, statt Details zu erfinden. Bei bewegtem Bild
+liefert jedes Nachbarframe echte Sub-Pixel-Information über dieselbe Stelle —
+so entstehen reale Details statt halluzinierter. Als Nebeneffekt entfällt das
+Flackern, das Einzelbild-Modelle im Video erzeugen.
 
-### Voraussetzungen
+Anschließend wird klassisch mit Lanczos vergrößert.
 
-- Docker mit NVIDIA GPU Support
-- NVIDIA GPU (Blackwell oder ähnlich)
-- Immich API-Key
-- Netzwerk-Zugang zu Immich-Instance
+**Bewusst kein KI-Upscaler.** Getestet wurden SwinIR realSR (x2/x4, GAN und
+PSNR) und DPIR. Beide liefern auf Standbildern mehr Schärfe, erzeugen aber
+einen glattgebügelten Plastik-Eindruck — Haut wirkt wie retuschiert, Kanten
+wie gezeichnet. Im direkten Vergleich schnitten sie schlechter ab als das
+unbearbeitete Original.
 
-### Installation (Standard Docker)
+### Warum das Ergebnis geprüft wird
+
+Beim Testen lieferten zwei von drei Inferenz-Backends **stillschweigend
+falsche Bilder**: ONNX Runtime CUDA gab reine Nullen zurück, TensorRT mit fp16
+lieferte NaN — beide ohne jede Fehlermeldung, mit plausibel aussehenden
+Bildraten. Ohne die Ausgabekontrolle in `encode.verify()` hätte ein
+Nachtdurchlauf tausende schwarze Videos erzeugt und ordentlich in die
+Bibliothek gestapelt. Die Prüfung ist deshalb nicht abschaltbar.
+
+## Voraussetzungen
+
+- Docker mit NVIDIA Container Toolkit
+- NVIDIA-GPU; bei **Blackwell** (RTX Pro 2000, RTX 50xx) zwingend ein Treiber
+  für CUDA 12.8+. Das Image ist entsprechend gebaut — mit CUDA 12.4 scheitert
+  die Inferenz auf diesen Karten mit *„no kernel image is available"*.
+- Immich 2.x/3.x (getestet gegen 3.1.0)
+
+## Einrichtung
 
 ```bash
-# 1. .env konfigurieren
 cp .env.example .env
-# Bearbeite .env mit deinen Settings
-
-# 2. Docker Image bauen
-docker build -t immich-booster .
-
-# 3. Container starten
-docker run --gpus all \
-  --env-file .env \
-  -v $(pwd)/temp:/app/temp \
-  -v $(pwd)/models:/models \
-  immich-booster
+# IMMICH_URL und IMMICH_API_KEY eintragen
+docker compose up -d --build
+docker compose logs -f
 ```
 
-### Mit Docker Compose
+`DRY_RUN=true` ist Voreinstellung: Es wird alles gerechnet, aber nichts
+hochgeladen. Erst wenn die Ergebnisse überzeugen, auf `false` stellen.
+
+### Einzelne Datei prüfen, ohne Immich
 
 ```bash
-# Annahme: Immich läuft bereits in Docker Netzwerk "immich-network"
-docker-compose up -d
-
-### Build & Push auf GitHub (GHCR)
-
-Automatischer Docker-Build via GitHub Actions ist eingerichtet:
-
-1. Repository zu GitHub pushen (Branch `main`/`master`).
-2. Workflow `.github/workflows/docker-publish.yml` baut und pusht nach GHCR:
-  - Image: `ghcr.io/Randomname653/immich-booster:latest`
-  - Zusätzliche Tags: Branch, Tag (`vX.Y.Z`), Commit-SHA
-
-Pull auf TrueNAS:
-```
-docker pull ghcr.io/Randomname653/immich-booster:latest
+docker compose run --rm immich-booster python3 main.py --file /app/temp/probe.mp4
 ```
 
-Compose-Referenz (TrueNAS):
-```
-image: ghcr.io/Randomname653/immich-booster:latest
-```
+## Auswahl der Videos
 
-### TrueNAS SCALE (empfohlen)
+Es gibt **keinen Gerätefilter**. In der Praxis tragen nur rund 10 % der Videos
+überhaupt Kamera-EXIF, und ausgerechnet die neuen Handyaufnahmen brauchen die
+Bearbeitung am wenigsten. Maßgeblich ist stattdessen der Zustand des Materials:
 
-1. Apps → Einstellungen → GPU-Unterstützung aktivieren (NVIDIA Treiber installieren, TrueNAS ggf. neu starten).
-2. Apps → Docker Compose → Neues Compose. Inhalt aus `docker-compose.yml` einfügen.
-3. Volumes auf einen Dataset mappen, z. B. `/mnt/tank/immich-booster/temp` → `/app/temp`, `/mnt/tank/immich-booster/models` → `/models`.
-4. `.env` Werte im Compose-UI setzen oder `.env` Datei als Secret/Config referenzieren:
-  - `IMMICH_URL=http://<immich-host>:2283/api`
-  - `IMMICH_API_KEY=<dein_api_key>`
-  - Optional: `DEVICE_FILTER=Pixel`, `TEMP_DIR=/app/temp`
-5. Ressourcen → GPU: eine oder mehrere GPUs zuweisen.
-6. App starten und Logs prüfen.
+| Klasse | Bedeutung | Behandlung |
+|---|---|---|
+| **A** | kurze Kante unter 720p | restaurieren und vergrößern |
+| **B** | groß genug, aber stark komprimiert | restaurieren |
+| **C** | mäßig komprimiert | leichte Aufbereitung |
+| **D** | Qualität ausreichend | unangetastet |
 
-Smoke-Test (GPU):
-```
-docker run --rm --gpus all nvidia/cuda:12.4.1-runtime-ubuntu22.04 nvidia-smi
-```
-```
+Favoriten werden vorgezogen. Videos über `SKIP_IF_SHORT_EDGE_GTE` oder
+`SKIP_IF_MBIT_GTE` werden nie angefasst — ein Neukodieren wäre dort ein
+Verlustgeschäft.
 
-## Healthcheck
+## Rechenzeit
 
-Der Container bringt einen Healthcheck mit, der regelmäßig prüft:
+Gemessen auf einer RTX 4090, über vollständige Sequenzen:
 
-- VapourSynth und Plugins: `lsmas`, `knlm`, `fmtc`
-- `vspipe` Verfügbarkeit
-- FFmpeg Encoder: `hevc_nvenc`/`h264_nvenc`
-- ExifTool Installation
+| Quellgröße | Bilder/s | MPix/s |
+|---|---|---|
+| 176×144 | 22,5 | 0,57 |
+| 720×720 | 9,5 | 4,9 |
+| 1280×720 | 5,8 | 5,3 |
 
-Manueller Test:
+Kleine Bilder lasten die GPU schlecht aus, der Durchsatz steigt mit der
+Auflösung. Für rund 18 Stunden Quellmaterial ergibt das etwa 30 Stunden auf
+einer 4090. Eine kleinere Karte braucht entsprechend länger.
 
-```
-docker run --rm immich-booster:latest python /app/healthcheck.py
-```
+Bei knappem VRAM: `VS_LENGTH` senken, `VS_TILE=512` setzen oder
+`VS_CPU_CACHE=true` (kostet Tempo).
 
-Status in Docker/Compose ist als `healthy`/`unhealthy` sichtbar.
+## Kennzeichnung
 
-## Compose-Beispiel
+KI-bearbeitete Videos werden dauerhaft gekennzeichnet — sichtbar durch ein
+eingebranntes Wasserzeichen unten rechts und maschinenlesbar durch einen
+XMP-Eintrag sowie den Immich-Tag `AI-enhanced`. Der dunkle Rand am Schriftzug
+sorgt dafür, dass die Kennzeichnung auch auf hellem Grund sichtbar bleibt.
 
-Beispiel `docker-compose.example.yml` (Werte ersetzen):
+## Aufbau
 
-```yaml
-version: '3.8'
-services:
-  immich-booster:
-    image: ghcr.io/Randomname653/immich-booster:latest # oder: immich-booster:latest (lokal gebaut)
-    container_name: immich-booster
-    runtime: nvidia
-    environment:
-      - TZ=Europe/Berlin
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
-      - IMMICH_URL=http://192.168.1.10:2283/api   # <- anpassen
-      - IMMICH_API_KEY=YOUR_API_KEY_HERE          # <- anpassen
-      - TEMP_DIR=/app/temp                        # optional
-      - DEVICE_FILTER=Pixel                       # optional
-    volumes:
-      - /mnt/tank/immich-booster/temp:/app/temp:rw
-      - /mnt/tank/immich-booster/models:/models:rw
-      - /mnt/tank/immich-booster/config:/app/config:rw
-    restart: unless-stopped
-```
+| Datei | Zweck |
+|---|---|
+| `main.py` | Ablaufsteuerung, Zeitfenster, Fehlerbehandlung |
+| `immich.py` | API-Client (Pagination, Upload, Stapeln, Tags) |
+| `selection.py` | Einstufung und Priorisierung |
+| `processor.py` | VapourSynth-Kette, wird von `vspipe` geladen |
+| `encode.py` | ffmpeg-Aufruf, Ergebnisprüfung, Metadaten |
+| `healthcheck.py` | Bereitschaftsprüfung des Containers |
 
-## Konfiguration
+## Fehlerverhalten
 
-Bearbeite `.env`:
+Ein Video, das nicht verarbeitet werden kann, beendet den Dienst nicht. Der
+Fehler wird gezählt; nach drei Versuchen wird das Video übersprungen. Ohne
+diese Zählung blockiert eine einzige defekte Datei den gesamten Ablauf, weil
+`restart: unless-stopped` den Container neu startet und dasselbe Video wieder
+an der Reihe wäre.
 
-```env
-IMMICH_URL=http://192.168.1.X:2283/api      # Deine Immich URL
-IMMICH_API_KEY=abc123...                      # Dein API-Key
-DEVICE_FILTER=Pixel                           # Nur diese Geräte prozessieren
-```
+Bekannte Fälle, die abgefangen sind:
 
-## Nächste Schritte
+- **AMR-Ton** in alten 3GP-Dateien — MP4 kann ihn nicht aufnehmen, er wird zu
+  AAC umkodiert. Ein pauschales `-c:a copy` lässt ffmpeg hier ohne Ausgabedatei
+  abbrechen.
+- **SD-Farbmatrix** — Material unter 720p folgt BT.601, nicht BT.709. Eine
+  pauschale 709-Annahme verschiebt die Farben sichtbar.
+- **Container-Rotation** — wird aus den Frame-Properties übernommen, damit
+  Hochkantvideos nicht quer landen.
 
-### 1. TensorRT Engine für Blackwell
+## Lizenz
 
-```bash
-# BasicVSR++ ONNX Model herunterladen
-wget https://download.openmmlab.com/mmagic/basicvsr_plusplus/basicvsr_plusplus_w7_8x4d64e64_600k_reds.pth
-
-# Mit trtexec in Engine-Datei konvertieren (NVIDIA Tools)
-trtexec --onnx=basicvsr_pp.onnx --saveEngine=basicvsr_pp_blackwell.engine --best
-```
-
-### 2. VapourSynth Filter aktivieren
-
-Ersetze den `KNLMeansCL` Dummy in `processor.py` mit echtem BasicVSR++ über vs-mlrt:
-
-```python
-clip = core.trt.Model(clip, engine_path="/models/basicvsr_pp_blackwell.engine")
-```
-
-### 3. Logging & Monitoring
-
-Die Logs werden im Container ausgegeben. Für Persistierung:
-
-```bash
-docker logs immich-booster -f
-```
-
-## Troubleshooting
-
-### "No GPU found"
-```bash
-# GPU Support prüfen
-docker run --gpus all nvidia/cuda:12.4-runtime-ubuntu22.04 nvidia-smi
-```
-
-### "vspipe command not found"
-Die Pipeline fällt automatisch auf reines FFmpeg (NVENC) zurück. Für VapourSynth stelle sicher, dass `vspipe` und benötigte Plugins verfügbar sind. In Compose/Container prüfen:
-```
-which vspipe && vspipe --version
-```
-
-### "ExifTool Error"
-```bash
-# Manuell im Container testen
-docker exec immich-booster exiftool -ver
-```
-
-## API Endpoints
-
-### Asset Image URL Structure
-```
-http://immich-instance/api/download/asset/{assetId}
-```
-
-### Stack API (Immich v1.90+)
-```
-POST /api/asset/stack/parent
-{
-  "parentAssetId": "uuid",
-  "childAssetIds": ["uuid1", "uuid2"]
-}
-```
-
-## Performance-Tipps
-
-- **CUDA Memory**: `core.max_cache_size = 20000` für 4K
-- **Threads**: `core.num_threads = 16` für Blackwell
-- **Preset**: `hevc_nvenc -preset slow` für beste Qualität
-- **CRF**: `-cq 20` für visuelle Qualität
-
-## License
-
-MIT License - Siehe LICENSE Datei
-
-## Support
-
-Für Fragen oder Issues: [GitHub Issues](https://github.com/video-boost/immich-booster/issues)
+MIT
