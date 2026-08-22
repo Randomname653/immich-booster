@@ -1,9 +1,11 @@
 services:
   immich-booster:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: immich-booster:latest
+    # Fertiges Image von GHCR - oeffentlich, kein Login noetig.
+    # Zum Selbstbauen die naechste Zeile auskommentieren und "build" aktivieren.
+    image: ghcr.io/randomname653/immich-booster:latest
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     container_name: immich-booster
     env_file:
       - .env
