@@ -8,33 +8,45 @@
 # mit "no kernel image is available for execution on the device" um.
 FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS builder
 
-ENV DEBIAN_FRONTEND=noninteractive
+# site-packages auch hier in den Suchpfad, sonst findet schon die Pruefung im
+# Builder das frisch gebaute VapourSynth nicht.
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONPATH=/usr/local/lib/python3.12/site-packages
 
 # Kein "|| true" hier: apt installiert bei einem einzigen unbekannten Paket
 # gar nichts, der Fehler wuerde also verschluckt und erst viel spaeter als
 # fehlendes git auffallen. libavresample gibt es seit FFmpeg 5 nicht mehr.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         autoconf automake libtool pkg-config build-essential \
-        git wget ca-certificates cython3 \
+        git wget ca-certificates \
         python3 python3-dev python3-pip \
         nasm yasm \
         libavcodec-dev libavformat-dev libavutil-dev \
         libswscale-dev libswresample-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Cython MUSS aus pip kommen, nicht aus apt: das Ubuntu-Paket cython3 legt das
+# Programm ausschliesslich als "cython3" ab, der VapourSynth-Build ruft aber
+# "cython" auf und bricht sonst mit exit 127 ab.
+RUN pip3 install --no-cache-dir --break-system-packages "Cython>=3.0.0" \
+    && cython --version
+
 WORKDIR /opt/src
 
 # zimg: Farbraum- und Skalierungskern von VapourSynth
 RUN git clone --depth=1 --branch release-3.0.5 https://github.com/sekrit-twc/zimg.git \
     && cd zimg && ./autogen.sh && ./configure --prefix=/usr/local \
-    && make -j"$(nproc)" && make install
+    && make -j"$(nproc)" && make install && ldconfig
 
+# In einzelne Schritte zerlegt: schlaegt etwas fehl, zeigt das Build-Log
+# direkt die schuldige Zeile statt einer 80 Zeichen langen Kette.
 ARG VAPOURSYNTH_VERSION=R79
 RUN wget -q https://github.com/vapoursynth/vapoursynth/archive/refs/tags/${VAPOURSYNTH_VERSION}.tar.gz \
-    && tar -zxf ${VAPOURSYNTH_VERSION}.tar.gz \
-    && cd vapoursynth-${VAPOURSYNTH_VERSION} \
-    && ./autogen.sh && ./configure --prefix=/usr/local \
-    && make -j"$(nproc)" && make install && ldconfig
+    && tar -zxf ${VAPOURSYNTH_VERSION}.tar.gz
+RUN cd vapoursynth-${VAPOURSYNTH_VERSION} && ./autogen.sh
+RUN cd vapoursynth-${VAPOURSYNTH_VERSION} && ./configure --prefix=/usr/local
+RUN cd vapoursynth-${VAPOURSYNTH_VERSION} && make -j"$(nproc)" && make install && ldconfig
+RUN python3 -c "import vapoursynth; print('VapourSynth im Builder ok')"
 
 # ffms2 liefert den Source-Filter. Er reicht die Container-Rotation als
 # Frame-Property durch, worauf sich processor.py stuetzt.
