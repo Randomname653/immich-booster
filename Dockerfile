@@ -8,10 +8,11 @@
 # mit "no kernel image is available for execution on the device" um.
 FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS builder
 
-# site-packages auch hier in den Suchpfad, sonst findet schon die Pruefung im
-# Builder das frisch gebaute VapourSynth nicht.
+# Meson legt das Modul nach /usr/local/lib/python3/dist-packages - ohne
+# Versionsnummer, weil es gegen die stabile ABI gebaut ist (vapoursynth.abi3.so).
+# Die versionierten Pfade stehen nur als Rueckfallebene dahinter.
 ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONPATH=/usr/local/lib/python3.12/site-packages:/usr/local/lib/python3.12/dist-packages
+    PYTHONPATH=/usr/local/lib/python3/dist-packages:/usr/local/lib/python3.12/site-packages:/usr/local/lib/python3.12/dist-packages
 
 # Kein "|| true" hier: apt installiert bei einem einzigen unbekannten Paket
 # gar nichts, der Fehler wuerde also verschluckt und erst viel spaeter als
@@ -50,8 +51,8 @@ RUN cd vapoursynth-${VAPOURSYNTH_VERSION} \
     && meson setup build --prefix=/usr/local --buildtype=release
 RUN cd vapoursynth-${VAPOURSYNTH_VERSION} && ninja -C build
 RUN cd vapoursynth-${VAPOURSYNTH_VERSION} && ninja -C build install && ldconfig
-# Meson legt das Python-Modul je nach Distribution unter site- oder
-# dist-packages ab; beide Pfade suchen und den gefundenen ausgeben.
+# Scheitert der Import trotzdem, listet der Schritt den tatsaechlichen
+# Ablageort auf - genau das hat den Pfad oben ueberhaupt erst geklaert.
 RUN python3 -c "import vapoursynth; print('VapourSynth im Builder ok:', vapoursynth.core.version_number())" \
     || (echo '--- Suche das installierte Modul ---'; find /usr/local -name "vapoursynth*" -maxdepth 6 | head -20; exit 1)
 
@@ -68,14 +69,13 @@ RUN git clone --depth=1 https://github.com/FFMS/ffms2.git \
 ############################################################
 FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
 
-# VapourSynth legt sein Python-Modul unter site-packages ab, Debian und Ubuntu
-# suchen aber in dist-packages. Ohne diesen Pfad findet "import vapoursynth"
+# Gleicher Suchpfad wie im Builder: ohne ihn findet "import vapoursynth"
 # nichts, obwohl die Dateien im Image liegen.
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     VAPOURSYNTH_PLUGIN_PATH=/usr/local/lib/vapoursynth \
     LD_LIBRARY_PATH=/usr/local/lib \
-    PYTHONPATH=/app:/usr/local/lib/python3.12/site-packages:/usr/local/lib/python3.12/dist-packages
+    PYTHONPATH=/app:/usr/local/lib/python3/dist-packages:/usr/local/lib/python3.12/site-packages:/usr/local/lib/python3.12/dist-packages
 
 # ffmpeg zieht die passenden av-Bibliotheken als Abhaengigkeit nach; sie hier
 # einzeln mit Versionsnummer aufzuzaehlen bricht nur bei jedem Ubuntu-Update.
