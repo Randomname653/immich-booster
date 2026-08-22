@@ -1,0 +1,71 @@
+# Fassung fuer TrueNAS. Werte direkt eingetragen, weil die Docker-Oberflaeche
+# von TrueNAS keine .env-Datei daneben legt.
+services:
+  immich-booster:
+    container_name: immich-booster
+    image: ghcr.io/randomname653/immich-booster:latest
+    restart: unless-stopped
+    shm_size: 8gb
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu, video, compute, utility]
+              count: 1
+              driver: nvidia
+
+    environment:
+      - TZ=Europe/Berlin
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+      - NVIDIA_VISIBLE_DEVICES=all
+
+      # ---- Immich ----
+      - IMMICH_URL=http://192.168.0.189:30041/api
+      - IMMICH_API_KEY=HIER_DEIN_KEY
+
+      # ---- Betrieb ----
+      # Erster Lauf: nichts hochladen, Zeitfenster ignorieren, ein Video.
+      # Sobald das Ergebnis ueberzeugt: DRY_RUN auf false, MAX_PER_RUN auf 0
+      # und IGNORE_TIME_WINDOW auf false fuer den Nachtbetrieb.
+      - DRY_RUN=true
+      - IGNORE_TIME_WINDOW=true
+      - MAX_PER_RUN=1
+      - NIGHT_START=01:15
+      - NIGHT_END=06:15
+
+      # ---- Auswahl ----
+      # Alles ab dieser kurzen Kante oder Bitrate bleibt unangetastet.
+      - SKIP_IF_SHORT_EDGE_GTE=2160
+      - SKIP_IF_MBIT_GTE=45
+      - TARGET_SHORT_EDGE=1080
+      - MAX_SCALE=4
+      # Nur Favoriten - sinnvoll fuer den ersten scharfen Lauf.
+      - ONLY_FAVORITES=false
+
+      # ---- Verarbeitung ----
+      # 6 = NTIRE 2021 Compressed Video Track 3 (temporal, gegen Kompressionsschaeden)
+      - VS_MODEL=6
+      - VS_LENGTH=15
+      # Bei knappem VRAM: VS_TILE=512 und/oder VS_CPU_CACHE=true
+      - VS_TILE=0
+      - VS_CPU_CACHE=false
+
+      # ---- Encoder ----
+      - ENCODER=hevc_nvenc
+      - PRESET=p6
+      - CQ=22
+
+      # ---- Kennzeichnung ----
+      - WATERMARK_ENABLED=true
+      - WATERMARK_TEXT=AI
+      - WATERMARK_ALPHA=0.35
+      - TAG_NAME=AI-enhanced
+
+    volumes:
+      # Arbeitsverzeichnis: haelt je Video kurz Original und Ergebnis.
+      - /mnt/nvme_apps/configurations/immich_booster/temp:/app/temp:rw
+      # Merkliste der bearbeiteten Videos - muss persistent bleiben, sonst
+      # faengt der Dienst nach jedem Neustart von vorne an.
+      - /mnt/nvme_apps/configurations/immich_booster/config:/app/config:rw
+      # Kein /models mehr: BasicVSR++ bringt seine Modelle im Image mit.
