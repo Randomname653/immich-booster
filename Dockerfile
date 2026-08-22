@@ -57,8 +57,9 @@ RUN python3 -c "import vapoursynth; print('VapourSynth im Builder ok:', vapoursy
     || (echo '--- Suche das installierte Modul ---'; find /usr/local -name "vapoursynth*" -maxdepth 6 | head -20; exit 1)
 
 # ffms2 liefert den Source-Filter. Er reicht die Container-Rotation als
-# Frame-Property durch, worauf sich processor.py stuetzt.
-RUN git clone --depth=1 https://github.com/FFMS/ffms2.git \
+# Frame-Property durch, worauf sich processor.py stuetzt. Auf Version 5.0
+# festgenagelt - ein Klon von master macht Builds unvorhersehbar.
+RUN git clone --depth=1 --branch 5.0 https://github.com/FFMS/ffms2.git \
     && cd ffms2 && ./autogen.sh && ./configure --prefix=/usr/local --enable-shared \
     && make -j"$(nproc)" && make install \
     && mkdir -p /usr/local/lib/vapoursynth \
