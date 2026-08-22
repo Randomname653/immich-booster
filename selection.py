@@ -57,8 +57,12 @@ def classify(info, cfg):
         return BUCKET_SKIP, "keine brauchbaren Metadaten"
     if info["trashed"]:
         return BUCKET_SKIP, "im Papierkorb"
-    if info["stacked"]:
-        return BUCKET_SKIP, "bereits gestapelt"
+    if "_boosted" in info["name"]:
+        return BUCKET_SKIP, "ist selbst ein bearbeitetes Ergebnis"
+    # Gestapelte Assets werden NICHT pauschal aussortiert: ein Suchtreffer kann
+    # ein beliebiges Mitglied eines Stapels sein. Welche Fassung die beste
+    # Quelle ist - und ob der Stapel schon eine bearbeitete enthaelt - klaert
+    # Immich.resolve_source() unmittelbar vor der Verarbeitung.
     if se >= cfg.skip_short_edge:
         return BUCKET_SKIP, f"bereits {se}p"
     if info["mbit"] >= cfg.skip_mbit:

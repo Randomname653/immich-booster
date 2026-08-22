@@ -6,6 +6,7 @@ stapelt sie mit dem Original. Das Original bleibt dabei immer erhalten.
 
 import logging
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -169,12 +170,36 @@ class Ledger:
         return p, f
 
 
-def process_one(api, cfg, ledger, info):
+def output_name(filename):
+    """Ausgabenamen bilden und dabei Zaehler-Suffixe entfernen.
+
+    Immich haengt bei Namenskollisionen ein "+1", "+2" an. Ohne Bereinigung
+    wandert das in den Namen der bearbeiteten Fassung und waechst mit jedem
+    Durchlauf weiter.
+    """
+    name, ext = os.path.splitext(os.path.basename(filename or "video"))
+    name = re.sub(r"\+\d+$", "", name)
+    return f"{name}_boosted.mp4"
+
+
+def process_one(api, cfg, ledger, info, raw_asset):
     """Ein Video verarbeiten. Wirft nur, wenn wirklich nichts zu retten ist."""
     started = time.time()
-    base = os.path.splitext(os.path.basename(info["name"] or info["id"]))[0]
-    src = os.path.join(cfg.temp, f"{info['id']}_src")
-    dst = os.path.join(cfg.temp, f"{base}_boosted.mp4")
+
+    # Bei gestapelten Assets die groesste Fassung als Quelle waehlen und das
+    # Ergebnis an denselben Stapel haengen.
+    source, parent_id, skip = api.resolve_source(raw_asset)
+    if skip:
+        log.info("  %s  uebersprungen: %s", info["name"][:48], skip)
+        ledger.mark_done(info["id"], None, info["size"], 0, 0)
+        return None
+    source_id = source.get("id", info["id"])
+    if source_id != info["id"]:
+        log.info("  Stapel: bearbeite stattdessen %s",
+                 (source.get("originalFileName") or source_id)[:48])
+
+    src = os.path.join(cfg.temp, f"{source_id}_src")
+    dst = os.path.join(cfg.temp, output_name(source.get("originalFileName") or info["name"]))
 
     tw, th = info["target"]
     log.info("  %s  %dx%d -> %dx%d  (%s: %s)",
@@ -182,7 +207,7 @@ def process_one(api, cfg, ledger, info):
              info["bucket"], info["reason"])
 
     try:
-        api.download_original(info["id"], src)
+        api.download_original(source_id, src)
 
         env = {
             "VS_SOURCE": src,
@@ -211,12 +236,16 @@ def process_one(api, cfg, ledger, info):
                      seconds, src_bytes / 1e6, out_bytes / 1e6)
             return None
 
-        new_id, _ = api.upload(dst, {"id": info["id"], "fileCreatedAt": info["_created"],
-                                     "fileModifiedAt": info["_modified"],
-                                     "deviceAssetId": info.get("_device_asset"),
-                                     "deviceId": info.get("_device")})
+        new_id, _ = api.upload(dst, {
+            "id": source_id,
+            "fileCreatedAt": source.get("fileCreatedAt") or info["_created"],
+            "fileModifiedAt": source.get("fileModifiedAt") or info["_modified"],
+            "deviceAssetId": source.get("deviceAssetId") or info.get("_device_asset"),
+            "deviceId": source.get("deviceId") or info.get("_device"),
+        })
         try:
-            api.stack(info["id"], new_id)
+            # An den Stapel-Elternteil haengen, nicht an den zufaelligen Treffer.
+            api.stack(parent_id, new_id)
         except ImmichError as exc:
             # Nicht gestapelt heisst: loses Duplikat in der Bibliothek. Das
             # muss sichtbar sein, nicht still durchgehen.
@@ -364,7 +393,7 @@ def main():
             info["_device"] = raw.get("deviceId")
 
             try:
-                process_one(api, cfg, ledger, info)
+                process_one(api, cfg, ledger, info, raw)
                 count += 1
             except KeyboardInterrupt:
                 raise

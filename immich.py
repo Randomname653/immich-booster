@@ -86,6 +86,47 @@ class Immich:
             page = int(nxt)
         log.info("Immich lieferte %d Videos", seen)
 
+    def asset_detail(self, asset_id):
+        return self._request("GET", f"/assets/{asset_id}").json()
+
+    def resolve_source(self, asset):
+        """Bei gestapelten Assets die beste Quelle im Stapel bestimmen.
+
+        Ein Suchtreffer kann ein beliebiges Mitglied eines Stapels sein - auch
+        ein bereits bearbeitetes oder eine kleinere Fassung. Bearbeitet werden
+        soll aber immer die groesste Datei, und das Ergebnis gehoert an
+        denselben Stapel.
+
+        Rueckgabe: (Quell-Asset, Stapel-Elternteil, Ueberspringgrund oder None)
+        """
+        stack = asset.get("stack") or {}
+        parent_id = stack.get("primaryAssetId") or asset.get("stackParentId")
+        if not stack and not parent_id:
+            return asset, asset["id"], None
+
+        primary = parent_id or asset["id"]
+        try:
+            parent = self.asset_detail(primary)
+        except ImmichError:
+            return asset, asset["id"], None
+
+        members = [parent]
+        children = parent.get("stack") or []
+        if isinstance(children, list):
+            members.extend(children)
+        elif isinstance(children, dict) and children.get("assets"):
+            members.extend(children["assets"])
+
+        best, best_size = asset, 0
+        for member in members:
+            name = (member.get("originalFileName") or "")
+            if "_boosted" in name:
+                return asset, primary, "Stapel enthaelt bereits eine bearbeitete Fassung"
+            size = int((member.get("exifInfo") or {}).get("fileSizeInByte") or 0)
+            if size > best_size:
+                best_size, best = size, member
+        return best, primary, None
+
     def download_original(self, asset_id, dest_path):
         url = f"{self.base}/api/assets/{asset_id}/original"
         with self.session.get(url, stream=True, timeout=self.timeout) as r:
