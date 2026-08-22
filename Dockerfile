@@ -11,7 +11,7 @@ FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS builder
 # site-packages auch hier in den Suchpfad, sonst findet schon die Pruefung im
 # Builder das frisch gebaute VapourSynth nicht.
 ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONPATH=/usr/local/lib/python3.12/site-packages
+    PYTHONPATH=/usr/local/lib/python3.12/site-packages:/usr/local/lib/python3.12/dist-packages
 
 # Kein "|| true" hier: apt installiert bei einem einzigen unbekannten Paket
 # gar nichts, der Fehler wuerde also verschluckt und erst viel spaeter als
@@ -27,9 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Cython MUSS aus pip kommen, nicht aus apt: das Ubuntu-Paket cython3 legt das
 # Programm ausschliesslich als "cython3" ab, der VapourSynth-Build ruft aber
-# "cython" auf und bricht sonst mit exit 127 ab.
-RUN pip3 install --no-cache-dir --break-system-packages "Cython>=3.0.0" \
-    && cython --version
+# "cython" auf und bricht sonst mit exit 127 ab. VapourSynth R79 verlangt
+# ausserdem mindestens Cython 3.1 und baut mit Meson.
+RUN pip3 install --no-cache-dir --break-system-packages \
+        "Cython>=3.1.0" meson-python meson ninja \
+    && cython --version && meson --version && ninja --version
 
 WORKDIR /opt/src
 
@@ -38,15 +40,20 @@ RUN git clone --depth=1 --branch release-3.0.5 https://github.com/sekrit-twc/zim
     && cd zimg && ./autogen.sh && ./configure --prefix=/usr/local \
     && make -j"$(nproc)" && make install && ldconfig
 
-# In einzelne Schritte zerlegt: schlaegt etwas fehl, zeigt das Build-Log
-# direkt die schuldige Zeile statt einer 80 Zeichen langen Kette.
+# VapourSynth baut seit R7x mit Meson, nicht mehr mit Autotools - im R79-Archiv
+# gibt es weder autogen.sh noch configure. In einzelne Schritte zerlegt, damit
+# das Log bei einem Fehler direkt die schuldige Zeile nennt.
 ARG VAPOURSYNTH_VERSION=R79
 RUN wget -q https://github.com/vapoursynth/vapoursynth/archive/refs/tags/${VAPOURSYNTH_VERSION}.tar.gz \
     && tar -zxf ${VAPOURSYNTH_VERSION}.tar.gz
-RUN cd vapoursynth-${VAPOURSYNTH_VERSION} && ./autogen.sh
-RUN cd vapoursynth-${VAPOURSYNTH_VERSION} && ./configure --prefix=/usr/local
-RUN cd vapoursynth-${VAPOURSYNTH_VERSION} && make -j"$(nproc)" && make install && ldconfig
-RUN python3 -c "import vapoursynth; print('VapourSynth im Builder ok')"
+RUN cd vapoursynth-${VAPOURSYNTH_VERSION} \
+    && meson setup build --prefix=/usr/local --buildtype=release
+RUN cd vapoursynth-${VAPOURSYNTH_VERSION} && ninja -C build
+RUN cd vapoursynth-${VAPOURSYNTH_VERSION} && ninja -C build install && ldconfig
+# Meson legt das Python-Modul je nach Distribution unter site- oder
+# dist-packages ab; beide Pfade suchen und den gefundenen ausgeben.
+RUN python3 -c "import vapoursynth; print('VapourSynth im Builder ok:', vapoursynth.core.version_number())" \
+    || (echo '--- Suche das installierte Modul ---'; find /usr/local -name "vapoursynth*" -maxdepth 6 | head -20; exit 1)
 
 # ffms2 liefert den Source-Filter. Er reicht die Container-Rotation als
 # Frame-Property durch, worauf sich processor.py stuetzt.
@@ -68,7 +75,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     VAPOURSYNTH_PLUGIN_PATH=/usr/local/lib/vapoursynth \
     LD_LIBRARY_PATH=/usr/local/lib \
-    PYTHONPATH=/app:/usr/local/lib/python3.12/site-packages
+    PYTHONPATH=/app:/usr/local/lib/python3.12/site-packages:/usr/local/lib/python3.12/dist-packages
 
 # ffmpeg zieht die passenden av-Bibliotheken als Abhaengigkeit nach; sie hier
 # einzeln mit Versionsnummer aufzuzaehlen bricht nur bei jedem Ubuntu-Update.
