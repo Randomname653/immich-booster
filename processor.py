@@ -24,12 +24,28 @@ _ROOT = os.environ.get("VS_PLUGIN_ROOT", "")
 # ist kein Verlass: er haengt an Umgebungsvariablen und einer Konfigurationsdatei,
 # und faellt er aus, meldet VapourSynth lediglich ein unbekanntes Attribut.
 _FFMS2_CANDIDATES = (
+    "/usr/local/lib/libffms2.so",
     "/usr/local/lib/vapoursynth/libffms2.so",
-    "/usr/local/lib/x86_64-linux-gnu/vapoursynth/libffms2.so",
     "/usr/lib/vapoursynth/libffms2.so",
     "/usr/lib/x86_64-linux-gnu/vapoursynth/libffms2.so",
-    "/usr/local/lib/libffms2.so",
 )
+
+
+def _plugin_dir():
+    """Verzeichnis, aus dem VapourSynth selbsttaetig laedt.
+
+    Es liegt neben dem Python-Modul, nicht unter /usr/local/lib/vapoursynth -
+    fragen ist zuverlaessiger als raten.
+    """
+    try:
+        import vapoursynth
+        base = os.path.dirname(vapoursynth.__file__)
+        candidate = os.path.join(base, "plugins")
+        if os.path.isdir(candidate):
+            return candidate
+    except Exception:
+        pass
+    return None
 
 
 def _load_plugins():
@@ -48,8 +64,14 @@ def _load_plugins():
     if hasattr(core, "ffms2"):
         return
 
+    plugin_dir = _plugin_dir()
+    candidates = [os.environ.get("VS_FFMS2")]
+    if plugin_dir:
+        candidates.append(os.path.join(plugin_dir, "libffms2.so"))
+    candidates += list(_FFMS2_CANDIDATES)
+
     tried = []
-    for path in (os.environ.get("VS_FFMS2"), *_FFMS2_CANDIDATES):
+    for path in candidates:
         if not path:
             continue
         tried.append(path)

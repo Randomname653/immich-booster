@@ -111,14 +111,36 @@ RUN set -eu; \
     ln -sf "$VSPIPE_BIN" /usr/local/bin/vspipe; \
     echo "vspipe verknuepft: $VSPIPE_BIN"
 
+# VapourSynth ab R7x bringt ein eigenes Verwaltungswerkzeug mit. Zwei Dinge
+# muessen darueber geregelt werden, sonst startet vspipe nicht und findet keine
+# Plugins:
+#
+#   config          hinterlegt Pfad zu Interpreter und Bibliothek fuer VSScript.
+#                   Ohne das bricht vspipe mit "Python executable and library
+#                   path couldn't be determined" ab.
+#   get-plugin-dir  nennt das Verzeichnis, in dem automatisch geladen wird. Das
+#                   liegt NEBEN dem Python-Modul, nicht unter /usr/local/lib/
+#                   vapoursynth - ein Symlink dort wird schlicht ignoriert.
+RUN set -eu; \
+    python3 -m vapoursynth config; \
+    PLUGIN_DIR="$(python3 -m vapoursynth get-plugin-dir)"; \
+    mkdir -p "$PLUGIN_DIR"; \
+    ln -sf /usr/local/lib/libffms2.so "$PLUGIN_DIR/libffms2.so"; \
+    echo "Plugin-Verzeichnis: $PLUGIN_DIR"; \
+    python3 -m vapoursynth check-env
+
 # Die Kette einmal echt durchlaufen lassen. Ein blosses "import vapoursynth"
 # beweist nichts: es gelingt auch dann, wenn vspipe seinen eingebetteten
 # Interpreter nicht hochbekommt - genau der Fall, der sonst erst beim ersten
 # Video auffaellt.
 COPY <<'PROBE' /tmp/probe.vpy
 import vapoursynth as vs
-vs.core.std.LoadPlugin("/usr/local/lib/vapoursynth/libffms2.so")
-assert hasattr(vs.core, "ffms2"), "ffms2 laedt nicht"
+# Erst den Autoload pruefen - das ist der Weg, den auch der Betrieb nimmt.
+auto = hasattr(vs.core, "ffms2")
+if not auto:
+    vs.core.std.LoadPlugin("/usr/local/lib/libffms2.so")
+assert hasattr(vs.core, "ffms2"), "ffms2 laesst sich nicht laden"
+print("ffms2 verfuegbar (Autoload)" if auto else "ffms2 nur ueber Dateipfad ladbar")
 vs.core.std.BlankClip(width=64, height=64, length=3).set_output()
 PROBE
 RUN vspipe -c y4m /tmp/probe.vpy - > /dev/null \
