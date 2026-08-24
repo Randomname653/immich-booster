@@ -97,6 +97,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /usr/local/ /usr/local/
 RUN ldconfig
 
+# Meson legt vspipe ins Python-Paketverzeichnis, nicht nach /usr/local/bin
+# (meson.build: install_dir = py.get_install_dir() / 'vapoursynth'). Ohne
+# Verknuepfung ist das Programm schlicht nicht im Suchpfad. Den Ort ermitteln
+# statt ihn festzuschreiben - er haengt an der Python-Version.
+RUN set -eu; \
+    VSPIPE_BIN="$(find /usr/local -type f -name vspipe -perm -u+x | head -1)"; \
+    if [ -z "$VSPIPE_BIN" ]; then \
+        echo "vspipe wurde nicht gebaut. Gefunden wurde:"; \
+        find /usr/local -name "vspipe*"; \
+        exit 1; \
+    fi; \
+    ln -sf "$VSPIPE_BIN" /usr/local/bin/vspipe; \
+    echo "vspipe verknuepft: $VSPIPE_BIN"
+
 # Die Kette einmal echt durchlaufen lassen. Ein blosses "import vapoursynth"
 # beweist nichts: es gelingt auch dann, wenn vspipe seinen eingebetteten
 # Interpreter nicht hochbekommt - genau der Fall, der sonst erst beim ersten
