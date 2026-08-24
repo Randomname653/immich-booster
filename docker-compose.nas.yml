@@ -31,6 +31,9 @@ services:
       - DRY_RUN=true
       - IGNORE_TIME_WINDOW=true
       - MAX_PER_RUN=1
+      # Einmalig auf true, nachdem eine Fehlerursache behoben wurde -
+      # sonst bleiben bereits abgeschriebene Videos fuer immer liegen.
+      - RESET_FAILED=true
       - NIGHT_START=01:15
       - NIGHT_END=06:15
 

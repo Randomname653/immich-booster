@@ -104,6 +104,7 @@ class Config:
         self.night_end = _clock("NIGHT_END", "06:15")
         self.always_on = _flag("IGNORE_TIME_WINDOW")
         self.max_per_run = _num("MAX_PER_RUN", 0, int)
+        self.reset_failed = _flag("RESET_FAILED")
         self.idle_sleep = _num("IDLE_SLEEP", 300, int)
 
     def in_window(self):
@@ -148,7 +149,8 @@ class Ledger:
     def mark_done(self, asset_id, new_id, src_bytes, out_bytes, seconds):
         self.conn.execute(
             "INSERT OR REPLACE INTO processed VALUES (?,?,?,?,?,?)",
-            (asset_id, new_id, datetime.now(), src_bytes, out_bytes, seconds),
+            (asset_id, new_id, datetime.now().isoformat(timespec="seconds"),
+             src_bytes, out_bytes, seconds),
         )
         self.conn.execute("DELETE FROM failed WHERE asset_id=?", (asset_id,))
         self.conn.commit()
@@ -159,10 +161,17 @@ class Ledger:
         tries = (row[0] if row else 0) + 1
         self.conn.execute(
             "INSERT OR REPLACE INTO failed VALUES (?,?,?,?)",
-            (asset_id, tries, str(message)[:500], datetime.now()),
+            (asset_id, tries, str(message)[:500],
+             datetime.now().isoformat(timespec="seconds")),
         )
         self.conn.commit()
         return tries
+
+    def reset_failed(self):
+        """Fehlerzaehler leeren, damit abgeschriebene Videos neu drankommen."""
+        cur = self.conn.execute("DELETE FROM failed")
+        self.conn.commit()
+        return cur.rowcount
 
     def stats(self):
         p = self.conn.execute("SELECT COUNT(*) FROM processed").fetchone()[0]
@@ -352,8 +361,13 @@ def main():
     ledger = Ledger(cfg.db_path)
     done, failed = ledger.stats()
     log.info("Bisher bearbeitet: %d   dauerhaft fehlgeschlagen: %d", done, failed)
+    if cfg.reset_failed and failed:
+        n = ledger.reset_failed()
+        log.info("RESET_FAILED gesetzt: %d Fehlschlaege verworfen, die Videos "
+                 "kommen wieder an die Reihe.", n)
     if cfg.dry_run:
-        log.info("PROBELAUF aktiv - es wird nichts hochgeladen (DRY_RUN=false zum Scharfschalten)")
+        log.info("PROBELAUF: es wird gerechnet, aber nichts hochgeladen und nichts "
+                 "gestapelt. Zum Scharfschalten DRY_RUN auf false setzen.")
 
     while True:
         if not cfg.in_window():

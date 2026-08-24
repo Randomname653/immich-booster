@@ -80,8 +80,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # ffmpeg zieht die passenden av-Bibliotheken als Abhaengigkeit nach; sie hier
 # einzeln mit Versionsnummer aufzuzaehlen bricht nur bei jedem Ubuntu-Update.
+# libpython3.12t64 ist Pflicht: vspipe bettet einen Python-Interpreter ein und
+# braucht dessen Shared Library. Fehlt sie, startet der Container anstandslos
+# und scheitert erst beim ersten Video mit "Failed to initialize VSScript.
+# Python executable and library path could not be determined".
+# In Ubuntu 24.04 traegt das Paket wegen der 64-Bit-time_t-Umstellung das
+# Suffix t64.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-pip \
+        python3 python3-pip libpython3.12t64 \
         ffmpeg \
         libimage-exiftool-perl \
         fonts-dejavu-core \
@@ -91,10 +97,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /usr/local/ /usr/local/
 RUN ldconfig
 
-# Frueh pruefen statt spaet scheitern: ohne diese beiden laeuft nichts.
-RUN python3 -c "import vapoursynth; print('VapourSynth', vapoursynth.core.version_number())" \
+# Die Kette einmal echt durchlaufen lassen. Ein blosses "import vapoursynth"
+# beweist nichts: es gelingt auch dann, wenn vspipe seinen eingebetteten
+# Interpreter nicht hochbekommt - genau der Fall, der sonst erst beim ersten
+# Video auffaellt.
+COPY <<'PROBE' /tmp/probe.vpy
+import vapoursynth as vs
+vs.core.std.LoadPlugin("/usr/local/lib/vapoursynth/libffms2.so")
+assert hasattr(vs.core, "ffms2"), "ffms2 laedt nicht"
+vs.core.std.BlankClip(width=64, height=64, length=3).set_output()
+PROBE
+RUN vspipe -c y4m /tmp/probe.vpy - > /dev/null \
+    && echo "vspipe, VSScript und ffms2 arbeiten" \
     && ffmpeg -hide_banner -encoders 2>/dev/null | grep -q hevc_nvenc \
-    && echo "hevc_nvenc vorhanden"
+    && echo "hevc_nvenc vorhanden" \
+    && rm -f /tmp/probe.vpy
 
 # PyTorch mit cu128: Voraussetzung dafuer, dass BasicVSR++ auf Blackwell laeuft.
 RUN pip3 install --no-cache-dir --break-system-packages \
