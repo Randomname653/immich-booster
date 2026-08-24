@@ -141,7 +141,8 @@ if not auto:
     vs.core.std.LoadPlugin("/usr/local/lib/libffms2.so")
 assert hasattr(vs.core, "ffms2"), "ffms2 laesst sich nicht laden"
 print("ffms2 verfuegbar (Autoload)" if auto else "ffms2 nur ueber Dateipfad ladbar")
-vs.core.std.BlankClip(width=64, height=64, length=3).set_output()
+# Ausdruecklich YUV: BlankClip liefert sonst RGB, und y4m nimmt nur YUV oder Grau.
+vs.core.std.BlankClip(width=64, height=64, length=3, format=vs.YUV420P8).set_output()
 PROBE
 RUN vspipe -c y4m /tmp/probe.vpy - > /dev/null \
     && echo "vspipe, VSScript und ffms2 arbeiten" \
