@@ -20,21 +20,48 @@ core = vs.core
 _ROOT = os.environ.get("VS_PLUGIN_ROOT", "")
 
 
+# Uebliche Ablageorte des Source-Filters. Auf den Autoload-Mechanismus allein
+# ist kein Verlass: er haengt an Umgebungsvariablen und einer Konfigurationsdatei,
+# und faellt er aus, meldet VapourSynth lediglich ein unbekanntes Attribut.
+_FFMS2_CANDIDATES = (
+    "/usr/local/lib/vapoursynth/libffms2.so",
+    "/usr/local/lib/x86_64-linux-gnu/vapoursynth/libffms2.so",
+    "/usr/lib/vapoursynth/libffms2.so",
+    "/usr/lib/x86_64-linux-gnu/vapoursynth/libffms2.so",
+    "/usr/local/lib/libffms2.so",
+)
+
+
 def _load_plugins():
-    """Plugins laden, die nicht im Autoload-Pfad liegen (portables Setup)."""
-    if not _ROOT:
+    """Source-Filter sicherstellen, notfalls ueber den Dateipfad."""
+    if _ROOT:
+        # Portables Windows-Setup: Backend-Bibliotheken in den DLL-Suchpfad.
+        for sub in ("vsmlrt/vsort", "vsmlrt/vsmlrt-cuda", "vsmlrt"):
+            path = os.path.join(_ROOT, *sub.split("/"))
+            if os.path.isdir(path):
+                try:
+                    os.add_dll_directory(path)
+                except (AttributeError, OSError):
+                    pass
+                os.environ["PATH"] = path + os.pathsep + os.environ.get("PATH", "")
+
+    if hasattr(core, "ffms2"):
         return
-    for sub in ("vsmlrt/vsort", "vsmlrt/vsmlrt-cuda", "vsmlrt"):
-        path = os.path.join(_ROOT, *sub.split("/"))
-        if os.path.isdir(path):
-            try:
-                os.add_dll_directory(path)
-            except (AttributeError, OSError):
-                pass
-            os.environ["PATH"] = path + os.pathsep + os.environ.get("PATH", "")
-    ffms2 = os.environ.get("VS_FFMS2")
-    if ffms2 and os.path.exists(ffms2) and not hasattr(core, "ffms2"):
-        core.std.LoadPlugin(ffms2)
+
+    tried = []
+    for path in (os.environ.get("VS_FFMS2"), *_FFMS2_CANDIDATES):
+        if not path:
+            continue
+        tried.append(path)
+        if os.path.exists(path):
+            core.std.LoadPlugin(path)
+            if hasattr(core, "ffms2"):
+                return
+    raise RuntimeError(
+        "Source-Filter ffms2 nicht gefunden. Gesucht in:\n  " + "\n  ".join(tried)
+        + "\nEntweder VS_FFMS2 auf die Bibliothek zeigen lassen oder "
+          "VAPOURSYNTH_PLUGIN_PATH pruefen."
+    )
 
 
 def _input_matrix(clip):
@@ -94,6 +121,10 @@ def build(source, target_w=0, target_h=0, restore=True, model=6,
             tile=[tile, tile] if tile else [0, 0],
             tile_pad=16,
             cpu_cache=cpu_cache,
+            # Rueckfallebene: konnte das Modell beim Bauen des Images nicht
+            # mitgeliefert werden, wird es beim ersten Lauf nachgeladen. Das
+            # dauert einmalig, ist aber besser als ein Abbruch.
+            auto_download=True,
         )
 
     if target_w and target_h and (target_w != rgb.width or target_h != rgb.height):

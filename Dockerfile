@@ -106,10 +106,18 @@ COPY requirements.txt /app/requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /app/requirements.txt
 
 # Modelle beim Bauen holen, damit der erste Lauf nachts nicht am Netz haengt.
-# Schlaegt der Download fehl, ist das kein Grund den Build abzubrechen - zur
-# Laufzeit koennen die Dateien nachgeladen werden. Es soll aber im Log stehen.
-RUN python3 -m vsbasicvsrpp \
-    || echo "WARNUNG: Modelle nicht vorab geladen, werden beim ersten Lauf geholt"
+# Schlaegt der Download fehl, bricht der Build nicht ab - processor.py laedt sie
+# dann zur Laufzeit nach. Die Zahl am Ende gehoert aber ins Log, sonst bleibt
+# unklar, ob der Schritt etwas bewirkt hat.
+RUN (python3 -m vsbasicvsrpp || echo "WARNUNG: Vorab-Download fehlgeschlagen") \
+    && python3 - <<'PY'
+import os, vsbasicvsrpp
+base = os.path.dirname(vsbasicvsrpp.__file__)
+found = [os.path.join(r, f) for r, _d, fs in os.walk(base) for f in fs if f.endswith(".pth")]
+print(f"Modelldateien im Image: {len(found)}")
+for f in sorted(found):
+    print("   ", os.path.relpath(f, base), f"{os.path.getsize(f)/1e6:.0f} MB")
+PY
 
 COPY *.py /app/
 

@@ -21,11 +21,31 @@ def check(name, fn):
     return True
 
 
+def _core_release(vs):
+    """Kernversion holen; version_number() gilt seit R79 als veraltet."""
+    try:
+        return vs.core.core_version.release_major
+    except AttributeError:
+        return vs.core.version_number()
+
+
 def _vapoursynth():
     import vapoursynth as vs
     if not hasattr(vs.core, "ffms2"):
-        raise RuntimeError("Source-Filter ffms2 nicht geladen")
-    return f"Core R{vs.core.version_number()}"
+        # Nicht nur melden, dass er fehlt - zeigen, was stattdessen da ist und
+        # wo gesucht wurde. Sonst beginnt das Suchen bei null.
+        loaded = sorted(p.namespace for p in vs.core.plugins())
+        import processor
+        try:
+            processor._load_plugins()
+        except Exception as exc:
+            raise RuntimeError(
+                f"{exc}\n        Autogeladen wurden: {loaded or 'keine Plugins'}"
+            )
+        if not hasattr(vs.core, "ffms2"):
+            raise RuntimeError(f"ffms2 fehlt; geladen sind: {loaded or 'keine'}")
+        return f"Core R{_core_release(vs)} (ffms2 ueber Dateipfad nachgeladen)"
+    return f"Core R{_core_release(vs)}"
 
 
 def _torch_cuda():
@@ -44,10 +64,18 @@ def _torch_cuda():
 def _basicvsrpp():
     import vsbasicvsrpp
     base = os.path.dirname(vsbasicvsrpp.__file__)
-    models = [f for f in os.listdir(base) if f.endswith(".pth")]
-    if not models:
-        raise RuntimeError("keine Modelldateien vorhanden")
-    return f"{len(models)} Modelle"
+    # Rekursiv suchen: je nach Version liegen die Gewichte direkt im Paket oder
+    # in einem Unterverzeichnis "models".
+    found = []
+    for root, _dirs, files in os.walk(base):
+        found += [os.path.join(root, f) for f in files if f.endswith(".pth")]
+    if not found:
+        raise RuntimeError(
+            f"keine .pth-Dateien unterhalb von {base} - werden beim ersten "
+            f"Lauf nachgeladen (auto_download)"
+        )
+    where = os.path.relpath(os.path.dirname(found[0]), base) or "."
+    return f"{len(found)} Modelle in {where}"
 
 
 def _nvenc():
