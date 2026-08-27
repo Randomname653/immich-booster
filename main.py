@@ -179,6 +179,14 @@ class Ledger:
         return p, f
 
 
+def _rate(info, seconds):
+    """Verarbeitungstempo als Text: Bilder je Sekunde und Anteil der Spielzeit."""
+    if seconds <= 0 or not info.get("duration"):
+        return "?"
+    frames = info["duration"] * 30
+    return f"{frames / seconds:.1f} B/s, {info['duration'] / seconds:.2f}x Echtzeit"
+
+
 def output_name(filename):
     """Ausgabenamen bilden und dabei Zaehler-Suffixe entfernen.
 
@@ -241,8 +249,12 @@ def process_one(api, cfg, ledger, info, raw_asset):
         seconds = time.time() - started
 
         if cfg.dry_run:
-            log.info("    [Probelauf] fertig in %.0fs, %.1f -> %.1f MB, nichts hochgeladen",
-                     seconds, src_bytes / 1e6, out_bytes / 1e6)
+            keep = os.path.join(cfg.temp, "probelauf", os.path.basename(dst))
+            os.makedirs(os.path.dirname(keep), exist_ok=True)
+            os.replace(dst, keep)
+            log.info("    [Probelauf] fertig in %.0fs (%s), %.1f -> %.1f MB",
+                     seconds, _rate(info, seconds), src_bytes / 1e6, out_bytes / 1e6)
+            log.info("    Ergebnis zum Ansehen: %s", keep)
             return None
 
         new_id, _ = api.upload(dst, {
@@ -266,8 +278,8 @@ def process_one(api, cfg, ledger, info, raw_asset):
             except ImmichError as exc:
                 log.warning("    Tag nicht gesetzt: %s", exc)
 
-        log.info("    fertig in %.0fs, %.1f -> %.1f MB, gestapelt",
-                 seconds, src_bytes / 1e6, out_bytes / 1e6)
+        log.info("    fertig in %.0fs (%s), %.1f -> %.1f MB, gestapelt",
+                 seconds, _rate(info, seconds), src_bytes / 1e6, out_bytes / 1e6)
         ledger.mark_done(info["id"], new_id, src_bytes, out_bytes, seconds)
         return new_id
     finally:
